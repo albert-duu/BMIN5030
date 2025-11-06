@@ -35,8 +35,7 @@ library(glmnet);    library(pROC)
 library(yardstick)
 set.seed(42)
 ```
-# ---- 1) Load data ----
-# I point this to my local CSV (UCI/Kaggle export).
+```{r}
 df <- readr::read_csv("data/drugs_reviews.csv", show_col_types = FALSE) |>
   renameWith(~"drugName", matches("^drug(name)?$", ignore.case=TRUE)) |>
   renameWith(~"condition", matches("^condition$",  ignore.case=TRUE)) |>
@@ -47,8 +46,8 @@ df <- readr::read_csv("data/drugs_reviews.csv", show_col_types = FALSE) |>
   mutate(date = suppressWarnings(ymd(date) %||% mdy(date)),
          rating = as.numeric(rating),
          duration = ifelse(is.na(duration), NA_character_, as.character(duration)))
-
-# ---- 2) I remove obvious label leaks and make simple features ----
+```
+```{r}
 scrub_rating_mentions <- function(txt) {
   if (is.na(txt)) return("")
   t <- tolower(txt)
@@ -73,7 +72,41 @@ df <- df |>
          review_len   = str_count(review_clean, "\\S+"),
          duration_bin = map_chr(duration, bin_duration),
          year         = year(date))
+```
+```{r}
+split_by_time <- function(g){
+  g <- arrange(g, date); n <- nrow(g)
+  n_tr <- floor(0.70*n); n_va <- floor(0.85*n)
+  g$split <- c(rep("train", n_tr),
+               rep("valid", max(0, n_va-n_tr)),
+               rep("test",  n-n_va))
+  g
+}
+df_s <- df |> group_by(condition) |> group_modify(~split_by_time(.x)) |> ungroup()
+df_s <- df_s |> mutate(y = as.integer(rating >= 8))
+```
+```{r}
+# ---- 4) I fit a metadata-only baseline (ridge logistic) ----
+meta_formula <- ~ condition + drugName + duration_bin + scale(review_len) + scale(year)
+X_meta <- Matrix::sparse.model.matrix(meta_formula, data=df_s)[, -1]
+y      <- df_s$y
+idx_trva <- which(df_s$split %in% c("train","valid"))
+idx_te   <- which(df_s$split == "test")
 
+cv_meta <- cv.glmnet(X_meta[idx_trva,], y[idx_trva], family="binomial", alpha=0)
+p_meta  <- as.numeric(predict(cv_meta, newx=X_meta[idx_te,], type="response", s="lambda.min"))
+pred_m  <- ifelse(p_meta >= 0.5, 1, 0)
+
+meta_metrics <- tibble(
+  model   = "Metadata",
+  roc_auc = as.numeric(pROC::auc(y[idx_te], p_meta)),
+  pr_auc  = as.numeric(yardstick::pr_auc_vec(truth=factor(y[idx_te]), estimate=p_meta)),
+  accuracy= mean(pred_m == y[idx_te]),
+  f1      = yardstick::f_meas_vec(truth=factor(y[idx_te]), estimate=factor(pred_m))
+)
+meta_metrics
+```
+```{r}
 
 ## Results {#sec-results}
 
