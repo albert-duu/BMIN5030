@@ -28,13 +28,13 @@ I compare two models: (1) a metadata-only logistic baseline (condition, drug, du
 
 Some draft code below:
 
-# ---- 0) Packages ----
+```{r}
 library(tidyverse); library(lubridate)
 library(text2vec);  library(Matrix)
 library(glmnet);    library(pROC)
 library(yardstick)
 set.seed(42)
-
+```
 # ---- 1) Load data ----
 # I point this to my local CSV (UCI/Kaggle export).
 df <- readr::read_csv("data/drugs_reviews.csv", show_col_types = FALSE) |>
