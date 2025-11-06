@@ -106,7 +106,6 @@ meta_metrics <- tibble(
 )
 meta_metrics
 ```
-```{r}
 
 ## Results {#sec-results}
 
