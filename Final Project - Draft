@@ -1,7 +1,7 @@
 ---
 title: "Your Title"
 subtitle: "BMIN503/EPID600 Final Project"
-author: "FirstName LastName"
+author: "Xiyuan Du"
 format: html
 editor: visual
 number-sections: true
@@ -10,21 +10,70 @@ embed-resources: true
 
 ------------------------------------------------------------------------
 
-Use this template to complete your project throughout the course. Your Final Project presentation will be based on the contents of this document. Replace the title/name above and text below with your own, but keep the headers. Feel free to change the theme and other display settings, although this is not required. I added a new sentence
-
 ## Overview {#sec-overview}
 
-Give a brief a description of your project and its goal(s), what data you are using to complete it, and what two faculty/staff in different fields you have spoken to about your project with a brief summary of what you learned from each person. Include a link to your final project GitHub repository.
+This project predicts patient satisfaction with medications from user-written reviews on Drugs.com. I quantify how much review text improves prediction beyond metadata (drug, condition, duration, timestamp) and surface condition-specific themes linked to low satisfaction. Models are evaluated on time-based splits with condition stratification to avoid leakage from future to past.
 
 ## Introduction {#sec-introduction}
 
-Describe the problem addressed, its significance, and some background to motivate the problem. This should extend what is in the @sec-overview.
+Patients increasingly rely on crowdsourced drug reviews to decide whether to start, continue, or switch therapies. While average ratings exist, they obscure heterogeneity by condition, drug, and treatment duration, and they ignore the rich signals in free-text narratives (e.g., side effects, onset time, expectations). The Drugs.com Drug Review dataset (200k+ reviews) provides both structured fields (drug, condition, duration, date) and unstructured text, enabling a comprehensive look at what drives satisfaction. Early exploration shows a right-skewed rating distribution, frequent missing duration, and literal “10/10” strings in text that could leak labels if not removed—underscoring the need for careful preprocessing and robust evaluation.
 
-Explain why your problem is interdisciplinary, what fields can contribute to its understanding, and incorporate background related to what you learned from meeting with faculty/staff.
+Faculty/staff advised three design choices that shape this study: (1) clarify the prediction target (ordinal vs. thresholded “satisfied”), (2) compare metadata-only models with metadata+text models to isolate the marginal value of language, and (3) use a time-based split with condition stratification to prevent leakage (e.g., using 2021 reviews to predict 2019) and to ensure fair comparison across conditions with different adoption timelines. This problem is inherently interdisciplinary: biostatistics for study design and uncertainty; NLP for feature extraction and leakage control; causal inference thinking for confounding by indication; HCI for interpreting themes and presenting insights to patients; and pharmacoepidemiology for domain context on adherence and side-effects. These perspectives informed the evaluation plan (threshold + ordinal), leakage checks (regex removal of rating mentions), and per-condition error analyses.
 
 ## Methods {#sec-methods}
 
-Describe the data used and general methodological approach used to address the problem described in the @sec-introduction. Subsequently, incorporate full R code necessary to retrieve and clean data, and perform analysis. Be sure to include a description of code so that others (including your future self) can understand what you are doing and why.
+I evaluate how much free-text reviews improve prediction of patient satisfaction beyond metadata (drug, condition, duration, and time). My primary target is binary: satisfied = rating ≥ 8. To avoid temporal leakage, I use per-condition, time-based splits: the earliest 70% for training, the next 15% for validation, and the latest 15% for testing.
+
+I compare two models: (1) a metadata-only logistic baseline (condition, drug, duration bin, review length, year) and (2) a metadata + text model using TF-IDF unigrams/bigrams from reviews after removing explicit rating strings (e.g., “10/10”). I report ROC-AUC, PR-AUC, accuracy, and F1 on the held-out test set. For interpretability, I surface words linked to low satisfaction using simple log-odds (and, when data allow, I repeat this per condition).
+
+Some draft code below:
+
+# ---- 0) Packages ----
+library(tidyverse); library(lubridate)
+library(text2vec);  library(Matrix)
+library(glmnet);    library(pROC)
+library(yardstick)
+set.seed(42)
+
+# ---- 1) Load data ----
+# I point this to my local CSV (UCI/Kaggle export).
+df <- readr::read_csv("data/drugs_reviews.csv", show_col_types = FALSE) |>
+  renameWith(~"drugName", matches("^drug(name)?$", ignore.case=TRUE)) |>
+  renameWith(~"condition", matches("^condition$",  ignore.case=TRUE)) |>
+  renameWith(~"review",    matches("^review$",     ignore.case=TRUE)) |>
+  renameWith(~"rating",    matches("^rating$",     ignore.case=TRUE)) |>
+  renameWith(~"date",      matches("^date$",       ignore.case=TRUE)) |>
+  renameWith(~"duration",  matches("^duration$",   ignore.case=TRUE)) |>
+  mutate(date = suppressWarnings(ymd(date) %||% mdy(date)),
+         rating = as.numeric(rating),
+         duration = ifelse(is.na(duration), NA_character_, as.character(duration)))
+
+# ---- 2) I remove obvious label leaks and make simple features ----
+scrub_rating_mentions <- function(txt) {
+  if (is.na(txt)) return("")
+  t <- tolower(txt)
+  pats <- c("\\b\\d{1,2}\\s*/\\s*10\\b",
+            "\\b(ten|10)\\s*out\\s*of\\s*10\\b",
+            "\\b\\d(\\.\\d)?\\s*/\\s*5\\b")
+  for (p in pats) t <- gsub(p, " ", t, perl=TRUE)
+  gsub("\\s+", " ", t)
+}
+bin_duration <- function(x){
+  if (is.na(x)) return("Unknown")
+  s <- tolower(x)
+  if (str_detect(s, "year")) return(">6 months")
+  if (str_detect(s, "month")) {
+    n <- readr::parse_number(s)
+    if (is.na(n)) return("1-6 months")
+    if (n < 1) "<1 month" else if (n <= 6) "1-6 months" else ">6 months"
+  } else if (str_detect(s, "week|day")) "<1 month" else "Unknown"
+}
+df <- df |>
+  mutate(review_clean = map_chr(review, scrub_rating_mentions),
+         review_len   = str_count(review_clean, "\\S+"),
+         duration_bin = map_chr(duration, bin_duration),
+         year         = year(date))
+
 
 ## Results {#sec-results}
 
@@ -32,4 +81,4 @@ Describe your results and include relevant tables, plots, and code/comments used
 
 ## Conclusion
 
-This the conclusion. The @sec-results can be invoked here.
+This the conclusion. The @sec-results can be invoked here.  
